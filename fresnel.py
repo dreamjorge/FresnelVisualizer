@@ -12,6 +12,8 @@ class FresnelCoefficients:
     Rp: float  # Reflectance for p-polarization
     Ts: float  # Transmittance for s-polarization
     Tp: float  # Transmittance for p-polarization
+    diffuse: float  # Diffuse reflection component
+    specular: float  # Specular reflection component
 
 class FresnelCalculator:
     """
@@ -40,11 +42,6 @@ class FresnelCalculator:
         self.transmitted_vector = None
 
     def calculate_fresnel_coefficients(self) -> FresnelCoefficients:
-        """
-        Calculates the Fresnel coefficients for s and p polarizations.
-
-        :return: FresnelCoefficients dataclass instance.
-        """
         n1 = self.medium1.refractive_index
         n2 = self.medium2.refractive_index
         theta_i = self.theta_i_rad
@@ -54,7 +51,7 @@ class FresnelCalculator:
         if np.abs(sin_theta_t) > 1.0:
             # Total Internal Reflection
             self.theta_t_rad = None
-            return FresnelCoefficients(Rs=1.0, Rp=1.0, Ts=0.0, Tp=0.0)
+            return FresnelCoefficients(Rs=1.0, Rp=1.0, Ts=0.0, Tp=0.0, diffuse=0.0, specular=1.0)
         else:
             self.theta_t_rad = np.arcsin(sin_theta_t)
 
@@ -62,16 +59,21 @@ class FresnelCalculator:
 
         # Fresnel Equations for s-polarization
         Rs = ((n1 * np.cos(theta_i) - n2 * np.cos(theta_t)) /
-              (n1 * np.cos(theta_i) + n2 * np.cos(theta_t))) ** 2
+            (n1 * np.cos(theta_i) + n2 * np.cos(theta_t))) ** 2
         # Fresnel Equations for p-polarization
         Rp = ((n2 * np.cos(theta_i) - n1 * np.cos(theta_t)) /
-              (n2 * np.cos(theta_i) + n1 * np.cos(theta_t))) ** 2
+            (n2 * np.cos(theta_i) + n1 * np.cos(theta_t))) ** 2
 
         # Transmittance
         Ts = 1 - Rs
         Tp = 1 - Rp
 
-        return FresnelCoefficients(Rs=Rs, Rp=Rp, Ts=Ts, Tp=Tp)
+        # Diffuse and Specular Components
+        diffuse = 0.1  # Example value for diffuse reflection (adjust as needed)
+        specular = 0.9  # Example value for specular reflection (adjust as needed)
+
+        return FresnelCoefficients(Rs=Rs, Rp=Rp, Ts=Ts, Tp=Tp, diffuse=diffuse, specular=specular)
+
 
     def _compute_jones_matrix_reflection(self) -> np.ndarray:
         """
@@ -120,6 +122,42 @@ class FresnelCalculator:
             self.transmitted_vector = self.jones_matrix_transmission @ incident_jones
         else:
             self.transmitted_vector = np.array([0.0, 0.0], dtype=float)
+            
+    def calculate_total_reflectance_and_transmittance(self, psi_deg: float) -> tuple:
+        """
+        Calculates the total reflectance and transmittance, including diffuse and specular components.
+
+        :param psi_deg: Polarization angle in degrees.
+        :return: Tuple of total reflectance and total transmittance.
+        """
+        psi_rad = np.deg2rad(psi_deg)
+        R_specular = (self.fresnel.Rs * (np.cos(psi_rad)**2) + self.fresnel.Rp * (np.sin(psi_rad)**2)).real
+        T_specular = (self.fresnel.Ts * (np.cos(psi_rad)**2) + self.fresnel.Tp * (np.sin(psi_rad)**2)).real
+
+        # Calculate total reflectance and transmittance
+        R_total = R_specular + self.fresnel.diffuse
+        T_total = T_specular * (1 - self.fresnel.diffuse)
+
+        # Ensure values are within [0, 1]
+        R_total = np.clip(R_total, 0, 1)
+        T_total = np.clip(T_total, 0, 1)
+
+        return R_total, T_total
+    
+    # fresnel.py
+
+    def calculate_diffuse_reflection(self, incident_intensity: float, angle_of_incidence: float) -> float:
+        """
+        Calculates the intensity of the diffuse reflection using Lambert's Cosine Law.
+
+        :param incident_intensity: Intensity of the incident light.
+        :param angle_of_incidence: Angle of incidence in radians.
+        :return: Intensity of the diffusely reflected light.
+        """
+        rho = 0.1  # Example value for diffuse reflectance coefficient (adjust based on material)
+        diffuse_intensity = incident_intensity * rho * np.cos(angle_of_incidence)
+        return max(diffuse_intensity, 0)  # Ensure the intensity is non-negative
+
 
     def get_incident_vector(self) -> Optional[np.ndarray]:
         """

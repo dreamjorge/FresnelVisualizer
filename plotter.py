@@ -17,6 +17,7 @@ class FresnelPlotter:
     def __init__(self, ray_length: float = 1.0):
         self.ray_length = ray_length
         self.fig, self.ax = plt.subplots(figsize=(12, 10))
+        self.fresnel_calculator: Optional[FresnelCalculator] = None  # Initialize as None
         self._setup_plot()
 
     def _setup_plot(self):
@@ -28,13 +29,16 @@ class FresnelPlotter:
         self.ax.grid(True)
         self.ax.axis('equal')
 
-    def initialize(self, title: str, medium1: Material, medium2: Material):
+
+    def initialize(self, title: str, medium1: Material, medium2: Material, theta_i_rad: float):
         """
-        Initializes the plot for animation with the interface and normal line.
+        Initializes the plot for animation with the interface, normal line,
+        and FresnelCalculator instance.
         
         :param title: Title of the plot.
         :param medium1: First medium.
         :param medium2: Second medium.
+        :param theta_i_rad: Incident angle in radians.
         """
         self.ax.set_title(title, fontsize=16)
         self._draw_interface(medium1, medium2)
@@ -42,10 +46,13 @@ class FresnelPlotter:
         limit = self.ray_length * 1.5
         self.ax.set_xlim(-limit, limit)
         self.ax.set_ylim(-limit, limit)
-
+        
+        # Create and store the FresnelCalculator instance
+        self.fresnel_calculator = FresnelCalculator(theta_i_rad, medium1, medium2)
+        
     def update(self, frame, theta_i_rad: float,
-               medium1: Material, medium2: Material,
-               calculator: FresnelCalculator):
+            medium1: Material, medium2: Material,
+            calculator: FresnelCalculator):
         """
         Updates the plot for each frame in the animation.
         
@@ -57,7 +64,8 @@ class FresnelPlotter:
         """
         self.ax.cla()
         self._setup_plot()
-        self.initialize(self.ax.get_title(), medium1, medium2)
+        # Pass theta_i_rad to initialize
+        self.initialize(self.ax.get_title(), medium1, medium2, theta_i_rad)
 
         # Polarization state using FresnelCalculator
         psi_deg = frame
@@ -98,12 +106,12 @@ class FresnelPlotter:
 
         # Annotate angles and coefficients
         self._annotate_angles(theta_i_rad, theta_t_rad, tir)
-        self._annotate_coefficients(calculator.fresnel, psi_deg)
+        self._annotate_coefficients(self.fresnel_calculator.fresnel, psi_deg)
 
         # Plot Jones vectors
         self._plot_jones_vectors(theta_i_rad, theta_t_rad,
-                                  incident_jones, reflected_jones,
-                                  transmitted_jones, tir)
+                                incident_jones, reflected_jones,
+                                transmitted_jones, tir)
 
         # Handle Total Internal Reflection annotation
         if tir:
@@ -257,45 +265,41 @@ class FresnelPlotter:
                      fontsize=14, ha='center', va='center')
 
 
+
     def _annotate_coefficients(self, fresnel_coeffs: FresnelCoefficients, psi_deg: float):
         """
-        Displays the Fresnel coefficients and total R and T on the plot.
+        Displays the Fresnel coefficients and total R, T, diffuse, and specular components on the plot.
 
         :param fresnel_coeffs: Instance containing Fresnel coefficients.
         :param psi_deg: Polarization angle in degrees.
         """
-        Rs_mag = fresnel_coeffs.Rs
-        Rp_mag = fresnel_coeffs.Rp
-        Ts_mag = fresnel_coeffs.Ts
-        Tp_mag = fresnel_coeffs.Tp
+        # Calculate total reflectance and transmittance
+        R_total, T_total = self.fresnel_calculator.calculate_total_reflectance_and_transmittance(psi_deg)
 
-        # Calculate total Reflectance (R) and Transmittance (T) using squared magnitudes
-        psi_rad = np.deg2rad(psi_deg)
-        R = (Rs_mag * (np.cos(psi_rad)**2) + Rp_mag * (np.sin(psi_rad)**2)).real  # Use .real
-        T = (Ts_mag * (np.cos(psi_rad)**2) + Tp_mag * (np.sin(psi_rad)**2)).real  # Use .real
+        # Improved annotation text with better formatting and clarity
+        annotation_text = (
+            "Fresnel Coefficients:\n"
+            f"  - $R_s$: {fresnel_coeffs.Rs:.3f}\n"
+            f"  - $R_p$: {fresnel_coeffs.Rp:.3f}\n"
+            f"  - $T_s$: {fresnel_coeffs.Ts:.3f}\n"
+            f"  - $T_p$: {fresnel_coeffs.Tp:.3f}\n\n"
+            "Total Values:\n"
+            f"  - Reflectance ($R$): {R_total * 100:.1f}%\n"
+            f"  - Transmittance ($T$): {T_total * 100:.1f}%\n\n"
+            "Components:\n"
+            f"  - Diffuse Reflection: {fresnel_coeffs.diffuse * 100:.1f}%\n"
+            f"  - Specular Reflection: {fresnel_coeffs.specular * 100:.1f}%"
+        )
 
-        # Normalize R and T to ensure R + T = 1 (if necessary)
-        total = R + T
-        if not np.isclose(total, 1.0, atol=1e-4):
-            R /= total
-            T /= total
+        self.ax.annotate(
+            annotation_text,
+            xy=(0.05, 0.95),
+            xycoords='axes fraction',
+            fontsize=10,  # Reduced font size for better readability
+            verticalalignment='top',
+            bbox=dict(boxstyle="round,pad=0.5", fc="lightyellow", alpha=0.8)
+        )
 
-        # Ensure R and T are within [0, 1]
-        R = np.clip(R, 0, 1)
-        T = np.clip(T, 0, 1)
-
-        annotation_text = (f"$R_s = {Rs_mag:.3f}$\n"
-                        f"$R_p = {Rp_mag:.3f}$\n"
-                        f"$T_s = {Ts_mag:.3f}$\n"
-                        f"$T_p = {Tp_mag:.3f}$\n\n"
-                        f"Total Reflectance $R = {R*100:.1f}\\%$\n"
-                        f"Total Transmittance $T = {T*100:.1f}\\%$")
-        self.ax.annotate(annotation_text,
-                        xy=(0.05, 0.95),
-                        xycoords='axes fraction',
-                        fontsize=14,
-                        verticalalignment='top',
-                        bbox=dict(boxstyle="round,pad=0.5", fc="yellow", alpha=0.5))
 
 
     def _plot_jones_vectors(self,
