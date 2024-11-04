@@ -59,17 +59,9 @@ class FresnelPlotter:
         self._setup_plot()
         self.initialize(self.ax.get_title(), medium1, medium2)
 
-        # Polarization state using Jones vector
+        # Polarization state using FresnelCalculator
         psi_deg = frame
-        psi_rad = np.deg2rad(psi_deg)
-        delta = 0  # Phase difference, can be varied if needed
-
-        # Incident Jones vector
-        incident_jones = np.array([
-            np.cos(psi_rad),
-            np.sin(psi_rad) * np.exp(1j * delta)
-        ], dtype=complex)
-        incident_jones /= np.linalg.norm(incident_jones)
+        calculator.set_polarization_angle(psi_deg)
 
         # Determine polarization state description
         polarization_state = self._determine_polarization_state(psi_deg)
@@ -81,16 +73,14 @@ class FresnelPlotter:
             fontsize=16
         )
 
-        # Apply Jones matrices to incident Jones vector
-        reflected_jones = calculator.jones_matrix_reflection @ incident_jones
-        if calculator.theta_t_rad is not None:
-            transmitted_jones = calculator.jones_matrix_transmission @ incident_jones
-        else:
-            transmitted_jones = np.array([0, 0], dtype=complex)
+        # Retrieve Fresnel vectors
+        incident_jones = calculator.get_incident_vector()
+        reflected_jones = calculator.get_reflected_vector()
+        transmitted_jones = calculator.get_transmitted_vector()
 
         # Calculate magnitudes of reflected and transmitted fields
-        E_ref_magnitude = np.linalg.norm(reflected_jones)
-        E_trans_magnitude = np.linalg.norm(transmitted_jones)
+        E_ref_magnitude = np.linalg.norm(reflected_jones) if reflected_jones is not None else 0.0
+        E_trans_magnitude = np.linalg.norm(transmitted_jones) if transmitted_jones is not None else 0.0
 
         # Check for Total Internal Reflection (TIR)
         tir = calculator.theta_t_rad is None
@@ -167,14 +157,14 @@ class FresnelPlotter:
 
         :param theta_i: Incident angle in radians.
         """
-        x_start = -self.ray_length * np.sin(theta_i)
-        y_start = self.ray_length * np.cos(theta_i)
-        dx = self.ray_length * np.sin(theta_i) * 0.95
-        dy = -self.ray_length * np.cos(theta_i) * 0.95
+        x_start = (-self.ray_length * np.sin(theta_i)).real  # Use .real to ensure real value
+        y_start = (self.ray_length * np.cos(theta_i)).real   # Use .real to ensure real value
+        dx = (self.ray_length * np.sin(theta_i) * 0.95).real  # Use .real to ensure real value
+        dy = (-self.ray_length * np.cos(theta_i) * 0.95).real  # Use .real to ensure real value
 
         self.ax.arrow(x_start, y_start, dx, dy,
-                      head_width=0.03, head_length=0.05,
-                      fc='blue', ec='blue', linewidth=2, label="Incident Ray")
+                    head_width=0.03, head_length=0.05,
+                    fc='blue', ec='blue', linewidth=2, label="Incident Ray")
 
     def _draw_reflected_ray(self, theta_i: float, magnitude: float):
         """
@@ -197,12 +187,13 @@ class FresnelPlotter:
         :param theta_t: Transmitted angle in radians.
         :param magnitude: Magnitude scaling factor for the transmitted ray.
         """
-        dx = magnitude * self.ray_length * np.sin(theta_t) * 0.95
-        dy = -magnitude * self.ray_length * np.cos(theta_t) * 0.95
+        dx = (magnitude * self.ray_length * np.sin(theta_t)).real  # Use .real to ensure real value
+        dy = (-magnitude * self.ray_length * np.cos(theta_t)).real  # Use .real to ensure real value
 
         self.ax.arrow(0, 0, dx, dy,
-                      head_width=0.03 * magnitude, head_length=0.05 * magnitude,
-                      fc='green', ec='green', linewidth=2, label="Transmitted Ray")
+                    head_width=0.03 * magnitude, head_length=0.05 * magnitude,
+                    fc='green', ec='green', linewidth=2, label="Transmitted Ray")
+
 
     def _annotate_angles(self, theta_i_rad: float, theta_t_rad: Optional[float], tir: bool):
         """
@@ -214,7 +205,12 @@ class FresnelPlotter:
         """
         theta_i_deg = np.rad2deg(theta_i_rad)
         theta_r_deg = theta_i_deg  # Reflection angle equals incident angle
-        theta_t_deg = np.rad2deg(theta_t_rad) if theta_t_rad is not None else None
+        # Ensure theta_t_rad is real before converting to degrees
+        if theta_t_rad is not None:
+            theta_t_rad = theta_t_rad.real  # Use the real part
+            theta_t_deg = np.rad2deg(theta_t_rad)
+        else:
+            theta_t_deg = None
 
         # Draw Incident Angle
         self._draw_angle_arc(0, 0, 90, 90 + theta_i_deg, 'blue', r'$\theta_i$')
@@ -260,6 +256,7 @@ class FresnelPlotter:
         self.ax.text(label_x, label_y, label, color=color,
                      fontsize=14, ha='center', va='center')
 
+
     def _annotate_coefficients(self, fresnel_coeffs: FresnelCoefficients, psi_deg: float):
         """
         Displays the Fresnel coefficients and total R and T on the plot.
@@ -267,15 +264,15 @@ class FresnelPlotter:
         :param fresnel_coeffs: Instance containing Fresnel coefficients.
         :param psi_deg: Polarization angle in degrees.
         """
-        Rs_mag = np.abs(fresnel_coeffs.Rs)
-        Rp_mag = np.abs(fresnel_coeffs.Rp)
-        Ts_mag = np.abs(fresnel_coeffs.Ts)
-        Tp_mag = np.abs(fresnel_coeffs.Tp)
+        Rs_mag = fresnel_coeffs.Rs
+        Rp_mag = fresnel_coeffs.Rp
+        Ts_mag = fresnel_coeffs.Ts
+        Tp_mag = fresnel_coeffs.Tp
 
         # Calculate total Reflectance (R) and Transmittance (T) using squared magnitudes
         psi_rad = np.deg2rad(psi_deg)
-        R = (Rs_mag**2) * (np.cos(psi_rad)**2) + (Rp_mag**2) * (np.sin(psi_rad)**2)
-        T = (Ts_mag**2) * (np.cos(psi_rad)**2) + (Tp_mag**2) * (np.sin(psi_rad)**2)
+        R = (Rs_mag * (np.cos(psi_rad)**2) + Rp_mag * (np.sin(psi_rad)**2)).real  # Use .real
+        T = (Ts_mag * (np.cos(psi_rad)**2) + Tp_mag * (np.sin(psi_rad)**2)).real  # Use .real
 
         # Normalize R and T to ensure R + T = 1 (if necessary)
         total = R + T
@@ -283,30 +280,30 @@ class FresnelPlotter:
             R /= total
             T /= total
 
-        # Ensure R and T are within [0,1]
+        # Ensure R and T are within [0, 1]
         R = np.clip(R, 0, 1)
         T = np.clip(T, 0, 1)
 
-        annotation_text = (f"$R_s = {Rs_mag**2:.3f}$\n"
-                           f"$R_p = {Rp_mag**2:.3f}$\n"
-                           f"$T_s = {Ts_mag**2:.3f}$\n"
-                           f"$T_p = {Tp_mag**2:.3f}$\n\n"
-                           f"Total Reflectance $R = {R*100:.1f}\%$\n"
-                           f"Total Transmittance $T = {T*100:.1f}\%$")
+        annotation_text = (f"$R_s = {Rs_mag:.3f}$\n"
+                        f"$R_p = {Rp_mag:.3f}$\n"
+                        f"$T_s = {Ts_mag:.3f}$\n"
+                        f"$T_p = {Tp_mag:.3f}$\n\n"
+                        f"Total Reflectance $R = {R*100:.1f}\\%$\n"
+                        f"Total Transmittance $T = {T*100:.1f}\\%$")
         self.ax.annotate(annotation_text,
-                         xy=(0.05, 0.95),
-                         xycoords='axes fraction',
-                         fontsize=14,
-                         verticalalignment='top',
-                         bbox=dict(boxstyle="round,pad=0.5",
-                                   fc="yellow", alpha=0.5))
+                        xy=(0.05, 0.95),
+                        xycoords='axes fraction',
+                        fontsize=14,
+                        verticalalignment='top',
+                        bbox=dict(boxstyle="round,pad=0.5", fc="yellow", alpha=0.5))
+
 
     def _plot_jones_vectors(self,
                             theta_i_rad: float,
                             theta_t_rad: Optional[float],
-                            incident_jones: np.ndarray,
-                            reflected_jones: np.ndarray,
-                            transmitted_jones: np.ndarray,
+                            incident_jones: Optional[np.ndarray],
+                            reflected_jones: Optional[np.ndarray],
+                            transmitted_jones: Optional[np.ndarray],
                             tir: bool):
         """
         Annotates the Jones vectors on the plot.
@@ -318,45 +315,53 @@ class FresnelPlotter:
         :param transmitted_jones: Jones vector for the transmitted ray.
         :param tir: Boolean indicating if Total Internal Reflection occurs.
         """
-        # INCIDENT RAY
-        origin_incident = (-self.ray_length * np.sin(theta_i_rad),
-                           self.ray_length * np.cos(theta_i_rad))
-        incident_offset = (0.4, 0.0)
-        incident_jones_latex = (
-            f'$|E_{{\\text{{inc}}}}\\rangle = '
-            f'[{self._format_complex(incident_jones[0])}, '
-            f'{self._format_complex(incident_jones[1])}]$'
-        )
-        rotation_incident = np.rad2deg(theta_i_rad)
-        self.ax.text(
-            origin_incident[0] + incident_offset[0],
-            origin_incident[1] + incident_offset[1],
-            incident_jones_latex,
-            color='blue', fontsize=14, ha='right', va='top',
-            rotation=-(90 - rotation_incident),
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8)
-        )
+        if incident_jones is not None:
+            # INCIDENT RAY
+            origin_incident = (-self.ray_length * np.sin(theta_i_rad),
+                               self.ray_length * np.cos(theta_i_rad))
+            incident_offset = (0.4, 0.0)
+            incident_jones_latex = (
+                f'$|E_{{\\text{{inc}}}}\\rangle = '
+                f'[{self._format_complex(incident_jones[0])}, '
+                f'{self._format_complex(incident_jones[1])}]$'
+            )
+            rotation_incident = np.rad2deg(theta_i_rad)
+            self.ax.text(
+                origin_incident[0] + incident_offset[0],
+                origin_incident[1] + incident_offset[1],
+                incident_jones_latex,
+                color='blue', fontsize=14, ha='right', va='top',
+                rotation=-(90 - rotation_incident),
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8)
+            )
 
-        # REFLECTED RAY
-        origin_reflected = (0, 0)
-        reflected_offset = (0.1, 0.0)
-        reflected_jones_latex = (
-            f'$|E_{{\\text{{ref}}}}\\rangle = '
-            f'[{self._format_complex(reflected_jones[0])}, '
-            f'{self._format_complex(reflected_jones[1])}]$'
-        )
-        rotation_reflected = np.rad2deg(theta_i_rad)
-        self.ax.text(
-            origin_reflected[0] + reflected_offset[0],
-            origin_reflected[1] + reflected_offset[1],
-            reflected_jones_latex,
-            color='red', fontsize=14, ha='left', va='bottom',
-            rotation=(90 - rotation_reflected),
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8)
-        )
+        if reflected_jones is not None:
+            # REFLECTED RAY
+            origin_reflected = (0, 0)
+            reflected_offset = (0.1, 0.0)
+            reflected_jones_latex = (
+                f'$|E_{{\\text{{ref}}}}\\rangle = '
+                f'[{self._format_complex(reflected_jones[0])}, '
+                f'{self._format_complex(reflected_jones[1])}]$'
+            )
+            rotation_reflected = np.rad2deg(theta_i_rad)
+            self.ax.text(
+                origin_reflected[0] + reflected_offset[0],
+                origin_reflected[1] + reflected_offset[1],
+                reflected_jones_latex,
+                color='red', fontsize=14, ha='left', va='bottom',
+                rotation=(90 - rotation_reflected),
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8)
+            )
 
-        # TRANSMITTED RAY
-        if not tir and theta_t_rad is not None:
+        if transmitted_jones is not None and not tir:
+            # Ensure theta_t_rad is real before converting to degrees
+            if theta_t_rad is not None:
+                theta_t_rad = theta_t_rad.real  # Extract the real part
+
+            rotation_transmitted = np.rad2deg(theta_t_rad)
+            
+            # Transmitted Ray
             origin_transmitted = (0, 0)
             transmitted_offset = (0.1, -0.1)
             transmitted_jones_latex = (
@@ -364,7 +369,6 @@ class FresnelPlotter:
                 f'[{self._format_complex(transmitted_jones[0])}, '
                 f'{self._format_complex(transmitted_jones[1])}]$'
             )
-            rotation_transmitted = np.rad2deg(theta_t_rad)
             self.ax.text(
                 origin_transmitted[0] + transmitted_offset[0],
                 origin_transmitted[1] + transmitted_offset[1],
@@ -373,6 +377,7 @@ class FresnelPlotter:
                 rotation=-90 + rotation_transmitted,
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8)
             )
+
 
     def _format_complex(self, z: complex) -> str:
         """

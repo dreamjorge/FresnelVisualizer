@@ -1,97 +1,146 @@
 # fresnel.py
 
-from dataclasses import dataclass
 import numpy as np
+from dataclasses import dataclass
 from typing import Optional
 
-from snell import Snell
 from materials import Material
 
 @dataclass
 class FresnelCoefficients:
-    """
-    Stores Fresnel reflection and transmission coefficients for s and p polarizations.
-    """
-    Rs: complex
-    Rp: complex
-    Ts: complex
-    Tp: complex
+    Rs: float  # Reflectance for s-polarization
+    Rp: float  # Reflectance for p-polarization
+    Ts: float  # Transmittance for s-polarization
+    Tp: float  # Transmittance for p-polarization
 
 class FresnelCalculator:
     """
-    Calculates Fresnel coefficients and constructs Jones matrices between two media.
+    Calculates Fresnel coefficients and Fresnel vectors for incident,
+    reflected, and transmitted rays based on polarization.
     """
-    def __init__(self, medium1: Material, medium2: Material, theta_i_deg: float):
+    def __init__(self, theta_i_rad: float, medium1: Material, medium2: Material):
         """
-        Initializes the FresnelCalculator with two media and an incident angle.
-        
-        :param medium1: Incident medium.
-        :param medium2: Transmitting medium.
-        :param theta_i_deg: Incident angle in degrees.
+        Initializes the FresnelCalculator with incident angle and media.
+
+        :param theta_i_rad: Incident angle in radians.
+        :param medium1: First medium (incident medium).
+        :param medium2: Second medium (transmitting medium).
         """
+        self.theta_i_rad = theta_i_rad
         self.medium1 = medium1
         self.medium2 = medium2
-        self.theta_i_deg = theta_i_deg
-        self.theta_i_rad = np.deg2rad(theta_i_deg)
+        self.theta_t_rad: Optional[float] = None  # Transmitted angle
+        self.fresnel: FresnelCoefficients = self.calculate_fresnel_coefficients()
+        self.jones_matrix_reflection = self._compute_jones_matrix_reflection()
+        self.jones_matrix_transmission = self._compute_jones_matrix_transmission()
+        
+        # Initialize Fresnel vectors
+        self.incident_vector = None
+        self.reflected_vector = None
+        self.transmitted_vector = None
 
-        # Initialize Snell's Law calculator
-        self.snell = Snell(
-            n1=self.medium1.refractive_index,
-            n2=self.medium2.refractive_index,
-            theta_i_rad=self.theta_i_rad
-        )
-
-        # Angles
-        self.theta_r_rad = self.theta_i_rad  # Reflection angle equals incident angle
-        self.theta_t_rad = self.snell.theta_t_rad  # Transmitted angle
-
-        # Fresnel coefficients
-        self.fresnel = self.compute_fresnel_coefficients()
-
-        # Jones matrices
-        self.jones_matrix_reflection = self.construct_jones_matrix_reflection()
-        self.jones_matrix_transmission = self.construct_jones_matrix_transmission()
-
-    def compute_fresnel_coefficients(self) -> FresnelCoefficients:
+    def calculate_fresnel_coefficients(self) -> FresnelCoefficients:
         """
-        Computes the Fresnel reflection and transmission coefficients.
+        Calculates the Fresnel coefficients for s and p polarizations.
+
+        :return: FresnelCoefficients dataclass instance.
         """
         n1 = self.medium1.refractive_index
         n2 = self.medium2.refractive_index
-
         theta_i = self.theta_i_rad
+
+        # Snell's Law
+        sin_theta_t = n1 / n2 * np.sin(theta_i)
+        if np.abs(sin_theta_t) > 1.0:
+            # Total Internal Reflection
+            self.theta_t_rad = None
+            return FresnelCoefficients(Rs=1.0, Rp=1.0, Ts=0.0, Tp=0.0)
+        else:
+            self.theta_t_rad = np.arcsin(sin_theta_t)
+
         theta_t = self.theta_t_rad
 
-        if theta_t is None:
-            # Total Internal Reflection: No transmission
-            Rs = Rp = 1 + 0j  # Perfect reflection
-            Ts = Tp = 0 + 0j
-            return FresnelCoefficients(Rs=Rs, Rp=Rp, Ts=Ts, Tp=Tp)
+        # Fresnel Equations for s-polarization
+        Rs = ((n1 * np.cos(theta_i) - n2 * np.cos(theta_t)) /
+              (n1 * np.cos(theta_i) + n2 * np.cos(theta_t))) ** 2
+        # Fresnel Equations for p-polarization
+        Rp = ((n2 * np.cos(theta_i) - n1 * np.cos(theta_t)) /
+              (n2 * np.cos(theta_i) + n1 * np.cos(theta_t))) ** 2
 
-        cos_theta_i = np.cos(theta_i)
-        cos_theta_t = np.cos(theta_t)
-
-        Rs = (n1 * cos_theta_i - n2 * cos_theta_t) / (n1 * cos_theta_i + n2 * cos_theta_t)
-        Rp = (n2 * cos_theta_i - n1 * cos_theta_t) / (n2 * cos_theta_i + n1 * cos_theta_t)
-        Ts = 1 + Rs
-        Tp = 1 + Rp
+        # Transmittance
+        Ts = 1 - Rs
+        Tp = 1 - Rp
 
         return FresnelCoefficients(Rs=Rs, Rp=Rp, Ts=Ts, Tp=Tp)
 
-    def construct_jones_matrix_reflection(self) -> np.ndarray:
+    def _compute_jones_matrix_reflection(self) -> np.ndarray:
         """
-        Constructs the Jones matrix for reflection.
-        """
-        return np.array([
-            [self.fresnel.Rs, 0],
-            [0, self.fresnel.Rp]
-        ], dtype=complex)
+        Computes the Jones matrix for reflection based on Fresnel coefficients.
 
-    def construct_jones_matrix_transmission(self) -> np.ndarray:
+        :return: 2x2 Jones matrix for reflection.
         """
-        Constructs the Jones matrix for transmission.
-        """
+        Rs = self.fresnel.Rs
+        Rp = self.fresnel.Rp
         return np.array([
-            [self.fresnel.Ts, 0],
-            [0, self.fresnel.Tp]
-        ], dtype=complex)
+            [np.sqrt(Rs), 0],
+            [0, np.sqrt(Rp)]
+        ], dtype=complex)  
+
+    def _compute_jones_matrix_transmission(self) -> np.ndarray:
+        """
+        Computes the Jones matrix for transmission based on Fresnel coefficients.
+
+        :return: 2x2 Jones matrix for transmission.
+        """
+        Ts = self.fresnel.Ts
+        Tp = self.fresnel.Tp
+        return np.array([
+            [np.sqrt(Ts), 0],
+            [0, np.sqrt(Tp)]
+        ], dtype=complex)  
+
+    def set_polarization_angle(self, psi_deg: float):
+        """
+        Sets the polarization angle and updates Fresnel vectors accordingly.
+
+        :param psi_deg: Polarization angle in degrees.
+        """
+        psi_rad = np.deg2rad(psi_deg)
+        # Incident Jones vector assuming linear polarization at angle psi
+        incident_jones = np.array([
+            np.cos(psi_rad),
+            np.sin(psi_rad)
+        ], dtype=float)  # Changed dtype to float
+        incident_jones /= np.linalg.norm(incident_jones)
+
+        self.incident_vector = incident_jones
+        self.reflected_vector = self.jones_matrix_reflection @ incident_jones
+
+        if self.theta_t_rad is not None:
+            self.transmitted_vector = self.jones_matrix_transmission @ incident_jones
+        else:
+            self.transmitted_vector = np.array([0.0, 0.0], dtype=float)
+
+    def get_incident_vector(self) -> Optional[np.ndarray]:
+        """
+        Returns the incident Jones vector.
+
+        :return: 2-element numpy array representing the incident Jones vector.
+        """
+        return self.incident_vector
+
+    def get_reflected_vector(self) -> Optional[np.ndarray]:
+        """
+        Returns the reflected Jones vector.
+
+        :return: 2-element numpy array representing the reflected Jones vector.
+        """
+        return self.reflected_vector
+
+    def get_transmitted_vector(self) -> Optional[np.ndarray]:
+        """
+        Returns the transmitted Jones vector.
+
+        :return: 2-element numpy array representing the transmitted Jones vector.
+        """
+        return self.transmitted_vector
